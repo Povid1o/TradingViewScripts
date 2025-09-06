@@ -1,0 +1,424 @@
+// This script is licensed under a Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+// Portions related to SMC are based on 'Smart Money Concepts [LuxAlgo]'
+// © LuxAlgo
+// Other components (Bollinger Awesome, EOM) are integrated based on user request and public domain knowledge or provided scripts.
+// Integration and v6 conversion by Gemini.
+
+//@version=6
+indicator('Комбинированный Индикатор (SMC + Bollinger + EOM) v6', 'Комбо v6', overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+//------------------------------------------------------------------------------
+// Глобальные Константы и Входные Параметры
+//------------------------------------------------------------------------------
+
+// --- Переключатели Компонентов ---
+string GRP_VISIBILITY = "Настройки Отображения Компонентов"
+showSMC       = input.bool(true, "Показывать SMC", group = GRP_VISIBILITY, inline = "vis1")
+showBollinger = input.bool(true, "Показывать Bollinger Awesome", group = GRP_VISIBILITY, inline = "vis1")
+showEOM       = input.bool(true, "Показывать EOM", group = GRP_VISIBILITY, inline = "vis1")
+
+// --- Общие Настройки ---
+string GRP_GENERAL = "Общие Настройки"
+ma_mode = input.string("SMA", "Тип MA для BB/EOM", options=["SMA", "EMA"], group = GRP_GENERAL) // Добавлено для гибкости, но по ТЗ используется SMA
+
+//------------------------------------------------------------------------------
+// Компонент 1: Bollinger Awesome Alert R1 (Конвертация из v4 + Интеграция)
+//------------------------------------------------------------------------------
+string GRP_BOLLINGER = "Настройки Bollinger Awesome"
+// --- Входы Bollinger ---
+bb_len        = input.int(20, "Длина BB", minval=1, group = GRP_BOLLINGER)
+bb_src        = input.source(close, "Источник BB", group = GRP_BOLLINGER)
+bb_mult       = input.float(2.0, "Множитель BB", minval=0.001, maxval=50, group = GRP_BOLLINGER)
+bb_ema_len    = input.int(3, "Длина быстрой EMA", minval=1, group = GRP_BOLLINGER)
+bb_ema_src    = input.source(close, "Источник быстрой EMA", group = GRP_BOLLINGER)
+bb_filter     = input.bool(true, "Фильтр: Сигнальная свеча внутри BB", group = GRP_BOLLINGER)
+sqz_filter    = input.bool(true, "Фильтр: BB Squeeze", group = GRP_BOLLINGER)
+sqz_threshold = input.float(0.01, "Порог Squeeze", group = GRP_BOLLINGER) // Примерный порог, может требовать настройки
+
+// --- Цвета Bollinger ---
+bb_basis_color = input.color(color.new(color.red, 0), "Цвет средней линии BB", group = GRP_BOLLINGER)
+bb_upper_color = input.color(color.new(color.gray, 50), "Цвет верхней линии BB", group = GRP_BOLLINGER)
+bb_lower_color = input.color(color.new(color.gray, 50), "Цвет нижней линии BB", group = GRP_BOLLINGER)
+bb_fill_color  = input.color(color.new(color.silver, 90), "Цвет заливки BB", group = GRP_BOLLINGER)
+bb_ema_color   = input.color(color.new(color.black, 0), "Цвет быстрой EMA", group = GRP_BOLLINGER)
+bb_buy_color   = input.color(color.new(color.green, 0), "Цвет стрелки Buy", group = GRP_BOLLINGER)
+bb_sell_color  = input.color(color.new(color.red, 0), "Цвет стрелки Sell", group = GRP_BOLLINGER)
+bb_sqz_color   = input.color(color.new(color.blue, 50), "Цвет заливки Squeeze", group = GRP_BOLLINGER)
+
+// --- Расчеты Bollinger ---
+var float bb_basis = na
+var float bb_upper = na
+var float bb_lower = na
+var float bb_ema = na
+var float bb_ao = na
+var float bb_squeeze = na
+var bool  bb_break_up = false
+var bool  bb_break_down = false
+
+if (showBollinger)
+    // Расчет MA (SMA по умолчанию согласно ТЗ)
+    bb_basis := ma_mode == "SMA" ? ta.sma(bb_src, bb_len) : ta.ema(bb_src, bb_len)
+    dev = bb_mult * ta.stdev(bb_src, bb_len)
+    bb_upper := bb_basis + dev
+    bb_lower := bb_basis - dev
+
+    // Быстрая EMA
+    bb_ema := ta.ema(bb_ema_src, bb_ema_len)
+
+    // Awesome Oscillator (AO)
+    bb_ao := ta.sma(hl2, 5) - ta.sma(hl2, 34) // Стандартный расчет AO
+
+    // BB Squeeze (простой вариант на основе ширины канала)
+    bb_squeeze := (bb_upper - bb_lower) / bb_basis
+
+    // Условия пробоя (пересечение EMA(3) и SMA(20) + AO + Фильтры)
+    // AO > 0 для покупки, AO < 0 для продажи (abs(AO) == 1/2 в оригинале R1.1 не соответствует стандартному AO, используем прямой знак AO)
+    bb_break_up := ta.crossover(bb_ema, bb_basis) and bb_ao > 0 and
+       (not bb_filter or close < bb_upper) and
+       (not sqz_filter or bb_squeeze > sqz_threshold)
+
+    bb_break_down := ta.crossunder(bb_ema, bb_basis) and bb_ao < 0 and
+       (not bb_filter or close > bb_lower) and
+       (not sqz_filter or bb_squeeze > sqz_threshold)
+
+// --- Отрисовка Bollinger ---
+plot(showBollinger ? bb_basis : na, "Средняя BB", color=bb_basis_color)
+p1 = plot(showBollinger ? bb_upper : na, "Верхняя BB", color=bb_upper_color)
+p2 = plot(showBollinger ? bb_lower : na, "Нижняя BB", color=bb_lower_color)
+fill(p1, p2, title="Заливка BB", color=bb_fill_color)
+
+// Заливка Squeeze (визуализация)
+// Вспомогательные плоты для fill
+usqzi = plot(showBollinger and sqz_filter ? bb_upper : na, "Hide Sqz Upper", color=color.new(color.white, 100)) // Скрытый
+lsqzi = plot(showBollinger and sqz_filter ? bb_lower : na, "Hide Sqz Lower", color=color.new(color.white, 100)) // Скрытый
+fill(p1, usqzi, color=showBollinger and sqz_filter and bb_squeeze <= sqz_threshold ? bb_sqz_color : color.new(color.white, 100), title="Верхняя заливка Squeeze")
+fill(p2, lsqzi, color=showBollinger and sqz_filter and bb_squeeze <= sqz_threshold ? bb_sqz_color : color.new(color.white, 100), title="Нижняя заливка Squeeze")
+
+
+// Быстрая EMA
+plot(showBollinger ? bb_ema : na, title="Быстрая EMA", color=bb_ema_color, linewidth=2)
+
+// Стрелки сигналов Bollinger Awesome
+plotshape(showBollinger and bb_break_up, title="Bollinger Пробой Вверх", style=shape.arrowup, location=location.belowbar, size=size.auto, text="Buy", color=bb_buy_color)
+plotshape(showBollinger and bb_break_down, title="Bollinger Пробой Вниз", style=shape.arrowdown, location=location.abovebar, size=size.auto, text="Sell", color=bb_sell_color)
+
+
+//------------------------------------------------------------------------------
+// Компонент 2: Ease of Movement (EOM) Watcher (Реализация + Интеграция)
+//------------------------------------------------------------------------------
+string GRP_EOM = "Настройки Ease of Movement (EOM)"
+// --- Входы EOM ---
+eom_len_sma   = input.int(24, "Длина SMA для EOM", minval=1, group = GRP_EOM)
+eom_vol_div   = input.float(1000000.0, "Делитель объема EOM", minval=1, group = GRP_EOM) // Увеличено для лучшего масштабирования
+eom_stdev_mult= input.float(2.5, "Множитель StDev EOM", minval=0.1, group = GRP_EOM)
+
+// --- Цвета EOM ---
+eom_pos_color   = input.color(color.new(color.green, 0), "Цвет EOM > 0", group = GRP_EOM)
+eom_neg_color   = input.color(color.new(color.red, 0), "Цвет EOM < 0", group = GRP_EOM)
+eom_pos_extr_color = input.color(color.new(#004d40, 0), "Цвет EOM > Порога", group = GRP_EOM) // Темно-зеленый
+eom_neg_extr_color = input.color(color.new(color.maroon, 0), "Цвет EOM < Порога", group = GRP_EOM) // Бордовый
+eom_threshold_color = input.color(color.new(color.orange, 50), "Цвет порогов StDev", group = GRP_EOM)
+
+// --- Расчеты EOM ---
+var float eom_value = na
+var float eom_sma = na
+var float eom_stdev = na
+var float eom_upper_threshold = na
+var float eom_lower_threshold = na
+var bool  eom_buy_signal = false
+var bool  eom_sell_signal = false
+
+if (showEOM)
+    // Расчет EOM
+    distanceMoved = (high + low) / 2 - (high[1] + low[1]) / 2
+    boxRatio = (nz(volume) / eom_vol_div) / nz(high - low, 1) // nz для избежания деления на ноль
+    eom_value := distanceMoved / nz(boxRatio, 1e-9) // nz для избежания деления на ноль
+
+    // SMA от EOM
+    eom_sma := ma_mode == "SMA" ? ta.sma(eom_value, eom_len_sma) : ta.ema(eom_value, eom_len_sma)
+
+    // Standard Deviation от EOM SMA
+    eom_stdev := ta.stdev(eom_sma, eom_len_sma)
+
+    // Пороги
+    eom_upper_threshold := eom_stdev_mult * eom_stdev
+    eom_lower_threshold := -eom_stdev_mult * eom_stdev
+
+    // Сигналы EOM (по ТЗ)
+    // Покупка: Гистограмма выходит из -2.5σ в положительную зону.
+    eom_buy_signal := eom_sma > 0 and eom_sma[1] < eom_lower_threshold
+    // Продажа: Гистограмма опускается ниже +2.5σ.
+    eom_sell_signal := ta.crossunder(eom_sma, eom_upper_threshold)
+
+// --- Отрисовка EOM (в отдельном окне) ---
+// Определяем цвета гистограммы
+eom_hist_color = color.gray // Цвет по умолчанию
+if showEOM
+    if eom_sma > eom_upper_threshold
+        eom_hist_color := eom_pos_extr_color
+    else if eom_sma > 0
+        eom_hist_color := eom_pos_color
+    else if eom_sma < eom_lower_threshold
+        eom_hist_color := eom_neg_extr_color
+    else if eom_sma < 0
+        eom_hist_color := eom_neg_color
+
+// График EOM SMA как гистограмма
+plot(showEOM ? eom_sma : na, "EOM SMA", color = eom_hist_color, style=plot.style_histogram, linewidth=2, histbase=0) // pane=1 для отдельного окна
+
+// Пороги StDev
+plot(showEOM ? eom_upper_threshold : na, "Верхний Порог EOM", color=eom_threshold_color, style=plot.style_line, linewidth=1)
+plot(showEOM ? eom_lower_threshold : na, "Нижний Порог EOM", color=eom_threshold_color, style=plot.style_line, linewidth=1)
+plot(showEOM ? 0 : na, "Нулевая линия EOM", color=color.new(color.gray, 50), style=plot.style_line, linewidth=1)
+
+// Отмечаем сигналы EOM на графике EOM
+plotshape(showEOM and eom_buy_signal, title="EOM Сигнал Покупки", location=location.bottom, color=color.green, style=shape.triangleup, size=size.small, offset = -eom_len_sma/2) // Смещаем для наглядности
+plotshape(showEOM and eom_sell_signal, title="EOM Сигнал Продажи", location=location.top, color=color.red, style=shape.triangledown, size=size.small, offset = -eom_len_sma/2) // Смещаем для наглядности
+
+//------------------------------------------------------------------------------
+// Компонент 3: Smart Money Concepts (SMC) (Конвертация из v5 + Интеграция)
+//------------------------------------------------------------------------------
+// --- ВНИМАНИЕ: Это упрощённая версия логики оригинального скрипта SMC
+// --- для точной конвертации и интеграции. Этот раздел предоставляет базовую ---
+// --- функциональность Swing Structure, BOS/CHoCH и Order Blocks. ---
+
+string GRP_SMC = "Настройки Smart Money Concepts (SMC)"
+// --- Входы SMC ---
+smc_pivot_lookback = input.int(10, "Поиск Пивотов (Свинг)", minval=1, group = GRP_SMC) // Примерное значение
+smc_show_ob = input.bool(true, "Показывать Ордер Блоки (OB)", group = GRP_SMC)
+smc_show_bos_choch = input.bool(true, "Показывать BOS/CHoCH", group = GRP_SMC)
+smc_show_eqhl = input.bool(true, "Показывать EQH/EQL", group = GRP_SMC)
+smc_eq_threshold_pct = input.float(0.1, "Порог для EQH/EQL (%)", minval=0.01, group = GRP_SMC)
+smc_show_premium_discount = input.bool(false, "Показывать Зоны Premium/Discount", group = GRP_SMC) // По ТЗ опционально, выкл по умолчанию
+
+// --- Цвета SMC ---
+smc_bos_color = input.color(color.new(color.green, 0), "Цвет BOS", group = GRP_SMC)
+smc_choch_color = input.color(color.new(color.red, 0), "Цвет CHoCH", group = GRP_SMC)
+smc_bull_ob_color = input.color(color.new(#3179f5, 80), "Цвет Бычьего OB", group = GRP_SMC) // #3179f5 с прозрачностью
+smc_bear_ob_color = input.color(color.new(#f77c80, 80), "Цвет Медвежьего OB", group = GRP_SMC) // #f77c80 с прозрачностью
+smc_eqh_color = input.color(color.new(color.blue, 0), "Цвет EQH", group = GRP_SMC)
+smc_eql_color = input.color(color.new(color.orange, 0), "Цвет EQL", group = GRP_SMC)
+smc_pd_color = input.color(color.new(color.gray, 85), "Цвет Зон P/D", group = GRP_SMC)
+
+
+// --- Структуры данных SMC ---
+// Используем varip для изменяемых переменных состояния
+varip int   smc_structureDirection = 0 // 1 = Bullish, -1 = Bearish
+varip float smc_lastSwingHigh = na
+varip float smc_lastSwingLow = na
+varip int   smc_lastSwingHighBar = na
+varip int   smc_lastSwingLowBar = na
+
+// Для хранения Ордер Блоков (упрощенно)
+var box[] smc_bullOrderBlocks = array.new_box()
+var box[] smc_bearOrderBlocks = array.new_box()
+var line[] smc_eqhLines = array.new_line()
+var line[] smc_eqlLines = array.new_line()
+var label[] smc_bosChochLabels = array.new_label()
+
+// --- Расчеты SMC ---
+bool smc_isBullishBOS = false
+bool smc_isBearishBOS = false
+bool smc_isBullishCHoCH = false
+bool smc_isBearishCHoCH = false
+bool smc_nearBullishOB = false
+bool smc_nearBearishOB = false
+int  smc_recentEQHCount = 0
+int  smc_recentEQLLowCount = 0
+
+
+if (showSMC)
+    // 1. Определение Свингов (упрощенный метод)
+    float swingHigh = ta.highest(high, smc_pivot_lookback)
+    int   swingHighBar = ta.highestbars(high, smc_pivot_lookback) // Отрицательный индекс
+    float swingLow = ta.lowest(low, smc_pivot_lookback)
+    int   swingLowBar = ta.lowestbars(low, smc_pivot_lookback)   // Отрицательный индекс
+
+    bool isNewSwingHigh = high == swingHigh and swingHighBar == - (smc_pivot_lookback -1) / 2 // Примерное условие центра пивота
+    bool isNewSwingLow = low == swingLow and swingLowBar == - (smc_pivot_lookback -1) / 2 // Примерное условие центра пивота
+
+    // 2. Определение BOS/CHoCH (упрощенная логика Swing Structure)
+    if (isNewSwingHigh)
+        if (smc_structureDirection == 1 and swingHigh > nz(smc_lastSwingHigh, -1.0)) // Пробой предыдущего максимума в бычьем тренде = BOS
+            smc_isBullishBOS := true
+            smc_structureDirection := 1 // Подтверждаем/продолжаем бычий тренд
+            if (smc_show_bos_choch)
+                label.new(bar_index[-(smc_pivot_lookback -1) / 2], swingHigh, "BOS", style=label.style_label_down, color=color.new(color.white, 100), textcolor=smc_bos_color, size=size.small)
+        else if (smc_structureDirection == -1 and swingHigh > nz(smc_lastSwingHigh, -1.0)) // Пробой предыдущего максимума в медвежьем тренде = CHoCH
+            smc_isBearishCHoCH := true // Сменили характер на бычий
+            smc_structureDirection := 1 // Меняем направление тренда на бычий
+            if (smc_show_bos_choch)
+                label.new(bar_index[-(smc_pivot_lookback -1) / 2], swingHigh, "CHoCH", style=label.style_label_down, color=color.new(color.white, 100), textcolor=smc_choch_color, size=size.small)
+        // Обновляем последний свинг хай
+        smc_lastSwingHigh := swingHigh
+        smc_lastSwingHighBar := bar_index[-(smc_pivot_lookback -1) / 2]
+
+
+    if (isNewSwingLow)
+        if (smc_structureDirection == -1 and swingLow < nz(smc_lastSwingLow, 999999.9)) // Пробой предыдущего минимума в медвежьем тренде = BOS
+            smc_isBearishBOS := true
+            smc_structureDirection := -1 // Подтверждаем/продолжаем медвежий тренд
+            if (smc_show_bos_choch)
+                label.new(bar_index[-(smc_pivot_lookback -1) / 2], swingLow, "BOS", style=label.style_label_up, color=color.new(color.white, 100), textcolor=smc_bos_color, size=size.small)
+        else if (smc_structureDirection == 1 and swingLow < nz(smc_lastSwingLow, 999999.9)) // Пробой предыдущего минимума в бычьем тренде = CHoCH
+            smc_isBullishCHoCH := true // Сменили характер на медвежий
+            smc_structureDirection := -1 // Меняем направление тренда на медвежий
+            if (smc_show_bos_choch)
+                label.new(bar_index[-(smc_pivot_lookback -1) / 2], swingLow, "CHoCH", style=label.style_label_up, color=color.new(color.white, 100), textcolor=smc_choch_color, size=size.small)
+        // Обновляем последний свинг лоу
+        smc_lastSwingLow := swingLow
+        smc_lastSwingLowBar := bar_index[-(smc_pivot_lookback -1) / 2]
+
+    // 3. Определение Ордер Блоков (OB) - упрощенно
+    // Бычий OB: последняя медвежья свеча перед сильным бычьим движением, пробившим структуру
+    // Медвежий OB: последняя бычья свеча перед сильным медвежьим движением, пробившим структуру
+    if (smc_show_ob)
+        // Поиск Бычьего OB
+        bool potentialBullOB_candle = close[1] < open[1] // Предыдущая свеча медвежья
+        bool strongBullMove = close > high[1] and close > open // Текущая свеча сильно бычья
+        if (potentialBullOB_candle and strongBullMove and (smc_isBullishBOS or smc_isBearishCHoCH)) // Формируется после пробоя/смены
+            box bullOB = box.new(bar_index[1], high[1], bar_index + 10, low[1], // Рисуем на 10 баров вперед
+              bgcolor=smc_bull_ob_color, border_color=color.new(color.blue, 50))
+            array.push(smc_bullOrderBlocks, bullOB)
+            // Проверка близости к активным бычьим OB
+            for b in smc_bullOrderBlocks
+                if low <= box.get_top(b) and high >= box.get_bottom(b) and box.get_right(b) >= bar_index
+                    smc_nearBullishOB := true
+                    box.set_border_style(b, line.style_solid) // Выделяем активный OB
+                    box.set_border_width(b, 2)
+
+
+        // Поиск Медвежьего OB
+        bool potentialBearOB_candle = close[1] > open[1] // Предыдущая свеча бычья
+        bool strongBearMove = close < low[1] and close < open // Текущая свеча сильно медвежья
+        if (potentialBearOB_candle and strongBearMove and (smc_isBearishBOS or smc_isBullishCHoCH)) // Формируется после пробоя/смены
+            box bearOB = box.new(bar_index[1], high[1], bar_index + 10, low[1], // Рисуем на 10 баров вперед
+              bgcolor=smc_bear_ob_color, border_color=color.new(color.red, 50))
+            array.push(smc_bearOrderBlocks, bearOB)
+             // Проверка близости к активным медвежьим OB
+            for b in smc_bearOrderBlocks
+                if low <= box.get_top(b) and high >= box.get_bottom(b) and box.get_right(b) >= bar_index
+                    smc_nearBearishOB := true
+                    box.set_border_style(b, line.style_solid) // Выделяем активный OB
+                    box.set_border_width(b, 2)
+
+        // Очистка старых OB (опционально, для производительности)
+        // ... (логика удаления старых боксов из массива)
+
+
+    // 4. Определение Равных Максимумов/Минимумов (EQH/EQL) - упрощенно
+    if (smc_show_eqhl)
+        float high_threshold = high[1] * (1 + smc_eq_threshold_pct / 100.0)
+        float low_threshold = high[1] * (1 - smc_eq_threshold_pct / 100.0)
+        if (high <= high_threshold and high >= low_threshold) // Текущий high близок к предыдущему
+            line eqh = line.new(bar_index[1], high[1], bar_index, high, color=smc_eqh_color, style=line.style_dashed, width=1)
+            array.push(smc_eqhLines, eqh)
+            smc_recentEQHCount += 1 // Считаем недавние EQH для фильтра флета
+
+        float high_threshold_low = low[1] * (1 + smc_eq_threshold_pct / 100.0)
+        float low_threshold_low = low[1] * (1 - smc_eq_threshold_pct / 100.0)
+        if (low <= high_threshold_low and low >= low_threshold_low) // Текущий low близок к предыдущему
+            line eql = line.new(bar_index[1], low[1], bar_index, low, color=smc_eql_color, style=line.style_dashed, width=1)
+            array.push(smc_eqlLines, eql)
+            smc_recentEQLLowCount += 1 // Считаем недавние EQL для фильтра флета
+
+        // Сброс счетчиков через некоторое время (например, 20 баров)
+        if bar_index % 20 == 0
+            smc_recentEQHCount := 0
+            smc_recentEQLLowCount := 0
+        // Очистка старых линий EQH/EQL (опционально)
+        // ...
+
+    // 5. Зоны Premium/Discount (относительно последнего свинга)
+    if (smc_show_premium_discount and not na(smc_lastSwingHigh) and not na(smc_lastSwingLow) and smc_lastSwingHighBar != smc_lastSwingLowBar)
+        float midPoint = (smc_lastSwingHigh + smc_lastSwingLow) / 2
+        int startBar = math.min(smc_lastSwingHighBar, smc_lastSwingLowBar)
+        int endBar = bar_index + 10 // Продлеваем в будущее
+
+        if (smc_structureDirection == 1) // Бычий тренд
+            box.new(startBar, smc_lastSwingHigh, endBar, midPoint, bgcolor = color.new(smc_pd_color, 80), border_color = na, text="Premium", text_halign = text.align_right)
+            box.new(startBar, midPoint, endBar, smc_lastSwingLow, bgcolor = color.new(smc_pd_color, 90), border_color = na, text="Discount", text_halign = text.align_right)
+        else if (smc_structureDirection == -1) // Медвежий тренд
+            box.new(startBar, smc_lastSwingHigh, endBar, midPoint, bgcolor = color.new(smc_pd_color, 90), border_color = na, text="Premium", text_halign = text.align_right)
+            box.new(startBar, midPoint, endBar, smc_lastSwingLow, bgcolor = color.new(smc_pd_color, 80), border_color = na, text="Discount", text_halign = text.align_right)
+
+
+//------------------------------------------------------------------------------
+// Комбинированная Логика Сигналов и Фильтр Флета
+//------------------------------------------------------------------------------
+string GRP_SIGNALS = "Настройки Комбинированных Сигналов"
+sig_show_arrows = input.bool(true, "Показывать стрелки комбо-сигналов", group = GRP_SIGNALS)
+sig_buy_color   = input.color(color.new(color.blue, 0), "Цвет стрелки комбо-покупки", group = GRP_SIGNALS)
+sig_sell_color  = input.color(color.new(color.purple, 0), "Цвет стрелки комбо-продажи", group = GRP_SIGNALS)
+sig_use_alerts  = input.bool(true, "Включить алерты для комбо-сигналов", group = GRP_SIGNALS)
+sig_flat_filter_threshold = input.int(3, "Порог EQH/EQL для фильтра флета", group = GRP_SIGNALS)
+
+// --- Фильтр флета ---
+// Если за последние N баров было больше X EQH или EQL, считаем флетом
+bool isFlat = showSMC and smc_show_eqhl and (smc_recentEQHCount >= sig_flat_filter_threshold or smc_recentEQLLowCount >= sig_flat_filter_threshold)
+
+// --- Условия для сигналов ---
+// Условие SMC Buy: Бычий BOS ИЛИ смена характера на бычий (Bearish CHoCH) + цена рядом с Бычьим OB
+smc_buy_condition = showSMC and (smc_isBullishBOS or smc_isBearishCHoCH) and (not smc_show_ob or smc_nearBullishOB)
+
+// Условие SMC Sell: Медвежий BOS ИЛИ смена характера на медвежий (Bullish CHoCH) + цена рядом с Медвежьим OB
+smc_sell_condition = showSMC and (smc_isBearishBOS or smc_isBullishCHoCH) and (not smc_show_ob or smc_nearBearishOB)
+
+// Условие Bollinger Buy: Пробой вверх (EMA(3) > SMA(20) + AO > 0 + фильтры)
+bollinger_buy_condition = showBollinger and bb_break_up
+
+// Условие Bollinger Sell: Пробой вниз (EMA(3) < SMA(20) + AO < 0 + фильтры)
+bollinger_sell_condition = showBollinger and bb_break_down
+
+// Условие EOM Buy: Выход из зоны <-2.5σ в положительную область (EOM SMA > 0 и EOM SMA[1] < нижний порог)
+eom_buy_condition = showEOM and eom_buy_signal
+
+// Условие EOM Sell: Пересечение сверху вниз порога +2.5σ
+eom_sell_condition = showEOM and eom_sell_signal
+
+// --- Комбинированные сигналы ---
+// Сигнал ПОКУПКИ: Все активные компоненты дают сигнал на покупку И не флет
+combined_long_signal = (not showSMC or smc_buy_condition) and (not showBollinger or bollinger_buy_condition) and (not showEOM or eom_buy_condition) and not isFlat
+
+// Сигнал ПРОДАЖИ: Все активные компоненты дают сигнал на продажу И не флет
+combined_short_signal = (not showSMC or smc_sell_condition) and (not showBollinger or bollinger_sell_condition) and (not showEOM or eom_sell_condition) and not isFlat
+
+// --- Отрисовка Комбинированных Сигналов ---
+plotshape(sig_show_arrows and combined_long_signal, title="Комбо Сигнал Покупки", style=shape.triangleup, location=location.belowbar, size=size.large, text="BUY", color=sig_buy_color)
+plotshape(sig_show_arrows and combined_short_signal, title="Комбо Сигнал Продажи", style=shape.triangledown, location=location.abovebar, size=size.large, text="SELL", color=sig_sell_color)
+
+// --- Алерты ---
+if (sig_use_alerts)
+    alert_buy_message = "Комбо ПОКУПКА: "
+    if showSMC and smc_buy_condition
+        alert_buy_message += "SMC OK "
+    if showBollinger and bollinger_buy_condition
+        alert_buy_message += "BB OK "
+    if showEOM and eom_buy_condition
+        alert_buy_message += "EOM OK "
+    alert_buy_message += "@ " + str.tostring(close)
+
+    alert_sell_message = "Комбо ПРОДАЖА: "
+    if showSMC and smc_sell_condition
+        alert_sell_message += "SMC OK "
+    if showBollinger and bollinger_sell_condition
+        alert_sell_message += "BB OK "
+    if showEOM and eom_sell_condition
+        alert_sell_message += "EOM OK "
+    alert_sell_message += "@ " + str.tostring(close)
+
+    if combined_long_signal
+        alert(alert_buy_message, alert.freq_once_per_bar)
+
+    if combined_short_signal
+        alert(alert_sell_message, alert.freq_once_per_bar)
+
+    // Дополнительные алерты от SMC (если нужно, раскомментировать и адаптировать из оригинального скрипта SMC)
+    // alertcondition(showSMC and smc_isBullishBOS, 'SMC Bullish BOS', 'SMC: Сформирован бычий BOS')
+    // alertcondition(showSMC and smc_isBearishCHoCH, 'SMC Bearish CHoCH', 'SMC: Сформирован медвежий CHoCH (смена на бычий)')
+    // ... и т.д. для других событий SMC
+
+
+// --- Дополнительная информация в статус-строке (опционально) ---
+// plotchar(smc_structureDirection, "Структура SMC", "", location = location.top)
+// plotchar(isFlat, "Фильтр Флета", "", location = location.top)

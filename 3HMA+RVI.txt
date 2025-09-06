@@ -1,0 +1,210 @@
+//@version=5
+indicator("Тройной Hull Moving Average (HMA) с RVI", shorttitle="Triple HMA + RVI", overlay=true)
+
+//Интеграция в код 3HMA индикатора RVI для верификации реакции HMA. Рекомендовано использовать на таймфреймах от 30m-1H до 1D
+
+// ---------- ЧАСТЬ 1: ТРОЙНОЙ HULL MOVING AVERAGE ----------
+
+// Выбор периодов для трех HMA
+hma_short_length = input.int(21, title="Малый период HMA (1H)", minval=1)
+hma_medium_length = input.int(34, title="Средний период HMA (4H)", minval=1)
+hma_long_length = input.int(55, title="Большой период HMA (1D)", minval=1)
+
+// Функция для расчета Hull Moving Average (HMA)
+hull_ma(src, length) => ta.wma(2 * ta.wma(src, math.round(length/2)) - ta.wma(src, length), math.round(math.sqrt(length)))
+
+// Расчет трех HMA
+hma_short = hull_ma(close, hma_short_length)
+hma_medium = hull_ma(close, hma_medium_length)
+hma_long = hull_ma(close, hma_long_length)
+
+// Определение цветов для различных режимов
+hma_short_color = hma_short > hma_short[1] ? color.green : color.red
+hma_medium_color = hma_medium > hma_medium[1] ? color.green : color.red
+hma_long_color = hma_long > hma_long[1] ? color.green : color.red
+
+// Вывод на график с явной привязкой к ценовому графику
+plot(hma_short, title="HMA (1H)", color=hma_short_color, linewidth=2)
+plot(hma_medium, title="HMA (4H)", color=hma_medium_color, linewidth=3)
+plot(hma_long, title="HMA (1D)", color=hma_long_color, linewidth=4)
+
+// Дополнительная настройка для отображения трендовых сигналов
+showSignals = input.bool(true, title="Показывать сигналы тренда?")
+
+// Логика определения тренда
+trend_aligned_up = hma_short > hma_medium and hma_medium > hma_long
+trend_aligned_down = hma_short < hma_medium and hma_medium < hma_long
+
+// Фоновый цвет
+bgcolor(showSignals ? (trend_aligned_up ? color.new(color.green, 90) : trend_aligned_down ? color.new(color.red, 90) : na) : na)
+
+// Улучшенная таблица - более яркая
+var table panel = table.new(position.top_right, 3, 4, border_width=1)
+
+// Заголовки таблицы
+if showSignals
+    table.cell(panel, 0, 0, "Тренд", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 0, "Направление", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+    table.cell(panel, 2, 0, "Сила", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+    
+    // Названия трендов
+    table.cell(panel, 0, 1, "HMA (1H)", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(panel, 0, 2, "HMA (4H)", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(panel, 0, 3, "HMA (1D)", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    
+    // Направление HMA
+    table.cell(panel, 1, 1, hma_short > hma_short[1] ? "Вверх" : "Вниз", bgcolor=hma_short > hma_short[1] ? color.new(color.green, 70) : color.new(color.red, 70), text_color=color.white)
+    table.cell(panel, 1, 2, hma_medium > hma_medium[1] ? "Вверх" : "Вниз", bgcolor=hma_medium > hma_medium[1] ? color.new(color.green, 70) : color.new(color.red, 70), text_color=color.white)
+    table.cell(panel, 1, 3, hma_long > hma_long[1] ? "Вверх" : "Вниз", bgcolor=hma_long > hma_long[1] ? color.new(color.green, 70) : color.new(color.red, 70), text_color=color.white)
+    
+    // Оценка силы тренда (наклон HMA)
+    hma_short_slope = (hma_short - hma_short[5]) / 5
+    hma_medium_slope = (hma_medium - hma_medium[5]) / 5
+    hma_long_slope = (hma_long - hma_long[5]) / 5
+    
+    short_strength = math.abs(hma_short_slope) > 0.2 ? "Сильный" : math.abs(hma_short_slope) > 0.1 ? "Средний" : "Слабый"
+    medium_strength = math.abs(hma_medium_slope) > 0.15 ? "Сильный" : math.abs(hma_medium_slope) > 0.07 ? "Средний" : "Слабый"
+    long_strength = math.abs(hma_long_slope) > 0.1 ? "Сильный" : math.abs(hma_long_slope) > 0.05 ? "Средний" : "Слабый"
+    
+    table.cell(panel, 2, 1, short_strength, bgcolor=short_strength == "Сильный" ? color.new(color.blue, 60) : short_strength == "Средний" ? color.new(color.purple, 60) : color.new(color.gray, 60), text_color=color.white)
+    table.cell(panel, 2, 2, medium_strength, bgcolor=medium_strength == "Сильный" ? color.new(color.blue, 60) : medium_strength == "Средний" ? color.new(color.purple, 60) : color.new(color.gray, 60), text_color=color.white)
+    table.cell(panel, 2, 3, long_strength, bgcolor=long_strength == "Сильный" ? color.new(color.blue, 60) : long_strength == "Средний" ? color.new(color.purple, 60) : color.new(color.gray, 60), text_color=color.white)
+
+// Алерты для HMA
+alertcondition(ta.crossover(hma_short, hma_medium), title="Пересечение HMA (1H) и HMA (4H) вверх", message="Пересечение HMA (1H) и HMA (4H) вверх на {{ticker}}")
+alertcondition(ta.crossunder(hma_short, hma_medium), title="Пересечение HMA (1H) и HMA (4H) вниз", message="Пересечение HMA (1H) и HMA (4H) вниз на {{ticker}}")
+alertcondition(ta.crossover(hma_medium, hma_long), title="Пересечение HMA (4H) и HMA (1D) вверх", message="Пересечение HMA (4H) и HMA (1D) вверх на {{ticker}}")
+alertcondition(ta.crossunder(hma_medium, hma_long), title="Пересечение HMA (4H) и HMA (1D) вниз", message="Пересечение HMA (4H) и HMA (1D) вниз на {{ticker}}")
+
+// ---------- ЧАСТЬ 2: УЛУЧШЕННЫЙ RVI ИНДИКАТОР ----------
+
+// Настройки для индикатора RVI
+showRVI = input.bool(true, title="Показывать RVI индикатор?")
+rvi_plot_location = input.string("Sub Window", title="Расположение индикатора RVI", options=["Sub Window", "Behind Price"])
+
+// Базовые параметры RVI
+rvi_length = input.int(12, title="Базовый период RVI", minval=1, maxval=50, group="Настройки RVI")
+rvi_signal_length = input.int(5, title="Период сигнальной линии RVI", minval=1, maxval=30, group="Настройки RVI")
+rvi_smoothing = input.int(5, title="Период сглаживания RVI", minval=1, maxval=30, group="Настройки RVI")
+emd_period = input.int(7, title="Период EMD фильтра", minval=1, maxval=30, group="Настройки RVI")
+
+// Уровни перекупленности/перепроданности
+rvi_overbought = input.float(0.30, title="Уровень перекупленности", step=0.05, group="Уровни RVI")
+rvi_oversold = input.float(-0.30, title="Уровень перепроданности", step=0.05, group="Уровни RVI")
+
+// EMD фильтр для сглаживания
+emd_filter(src, len) => var float emd = 0.0, alpha = 2 / (len + 1), emd := alpha * src + (1 - alpha) * nz(emd[1], src), emd
+
+// Расчет улучшенного RVI
+enhanced_rvi(length, smoothing, emd_len) => 
+    change_close = ta.change(close, 1), 
+    numerator = change_close + 0.5 * change_close[1] + 0.25 * change_close[2], 
+    denominator = math.abs(change_close) + 0.5 * math.abs(change_close[1]) + 0.25 * math.abs(change_close[2]), 
+    num_smoothed = ta.sma(numerator, length), 
+    den_smoothed = ta.sma(denominator, length), 
+    raw_rvi = den_smoothed != 0 ? num_smoothed / den_smoothed : 0, 
+    pre_rvi = ta.wma(raw_rvi, smoothing), 
+    filtered_rvi = emd_filter(pre_rvi, emd_len), 
+    filtered_rvi
+
+// Расчет основной и сигнальной линий
+rvi_main = enhanced_rvi(rvi_length, rvi_smoothing, emd_period)
+rvi_signal = ta.wma(rvi_main, rvi_signal_length)
+
+// Логика для определения дивергенций
+lookback = 5
+price_higher = close > close[lookback]
+price_lower = close < close[lookback]
+rvi_higher = rvi_main > rvi_main[lookback]
+rvi_lower = rvi_main < rvi_main[lookback]
+
+// Сигналы дивергенции
+bullish_div = price_lower and rvi_higher
+bearish_div = price_higher and rvi_lower
+
+// Сигналы пересечения
+crossover_up = ta.crossover(rvi_main, rvi_signal)
+crossover_down = ta.crossunder(rvi_main, rvi_signal)
+
+// Сила сигнала на основе угла пересечения
+signal_strength = math.abs(rvi_main - rvi_signal) * 100
+
+// Сигналы для длинных и коротких позиций с фильтрами
+long_signal = crossover_up and rvi_main < rvi_overbought and (trend_aligned_up or bullish_div)
+short_signal = crossover_down and rvi_main > rvi_oversold and (trend_aligned_down or bearish_div)
+
+// Отображение RVI на отдельном окне
+is_sub_window = rvi_plot_location == "Sub Window"
+
+
+
+// Отрисовка индикатора в отдельном окне
+rvi_plot = plot(showRVI and is_sub_window ? rvi_main : na, title="RVI Основная", color=color.rgb(0, 150, 200), linewidth=2)
+sig_plot = plot(showRVI and is_sub_window ? rvi_signal : na, title="RVI Сигнальная", color=color.rgb(255, 82, 82), linewidth=1)
+
+fill(rvi_plot, sig_plot, color=showRVI and is_sub_window ? (rvi_main > rvi_signal ? color.new(color.green, 80) : color.new(color.red, 80)) : na, title="Заливка RVI")
+
+hline(showRVI and is_sub_window ? rvi_overbought : na, title="Перекупленность", color=color.new(color.red, 50), linestyle=hline.style_dashed)
+hline(showRVI and is_sub_window ? rvi_oversold : na, title="Перепроданность", color=color.new(color.green, 50), linestyle=hline.style_dashed)
+hline(showRVI and is_sub_window ? 0 : na, title="Нулевая линия", color=color.new(color.gray, 50))
+
+// Сигналы на покупку с динамическим размером
+plotshape(showRVI and is_sub_window and long_signal and signal_strength > 5 ? long_signal : na, title="Сильный сигнал на покупку", location=location.bottom, color=color.green, style=shape.triangleup, size=size.small)
+
+plotshape(showRVI and is_sub_window and long_signal and signal_strength <= 5 ? long_signal : na, title="Слабый сигнал на покупку", location=location.bottom, color=color.green, style=shape.triangleup, size=size.tiny)
+
+// Сигналы на продажу с динамическим размером
+plotshape(showRVI and is_sub_window and short_signal and signal_strength > 5 ? short_signal : na, title="Сильный сигнал на продажу", location=location.top, color=color.red, style=shape.triangledown, size=size.small)
+
+plotshape(showRVI and is_sub_window and short_signal and signal_strength <= 5 ? short_signal : na, title="Слабый сигнал на продажу", location=location.top, color=color.red, style=shape.triangledown, size=size.tiny)
+plotshape(showRVI and is_sub_window and bullish_div and not long_signal ? bullish_div : na, title="Бычья дивергенция", location=location.bottom, color=color.new(color.blue, 20), style=shape.diamond, size=size.tiny)
+plotshape(showRVI and is_sub_window and bearish_div and not short_signal ? bearish_div : na, title="Медвежья дивергенция", location=location.top, color=color.new(color.fuchsia, 20), style=shape.diamond, size=size.tiny)
+
+// Отображение RVI позади цены
+rvi_scaling_factor = input.float(0.5, "Масштаб RVI за ценой", 0.1, 2.0, 0.1, "Настройки RVI")
+rvi_shift = input.int(0, "Смещение RVI", -100, 100, tooltip = "Настройки RVI")
+
+var float price_range = na
+var float mid_price = na
+var float rvi_normalized = na
+var float rvi_signal_normalized = na
+
+price_range := ta.highest(high, 50) - ta.lowest(low, 50)
+mid_price := (ta.highest(high, 50) + ta.lowest(low, 50)) / 2
+rvi_normalized := mid_price + rvi_main * price_range * rvi_scaling_factor
+rvi_signal_normalized := mid_price + rvi_signal * price_range * rvi_scaling_factor
+
+plot(showRVI and not is_sub_window ? rvi_normalized : na, "RVI за ценой", color.new(color.rgb(0, 150, 200), 60), 2, offset = rvi_shift)
+plot(showRVI and not is_sub_window ? rvi_signal_normalized : na, "RVI Сигнал за ценой", color.new(color.rgb(255, 82, 82), 60), 1, offset = rvi_shift)
+// Таблица с сигналами RVI
+var table rvi_panel = table.new(position.bottom_right, 2, 3, border_width=1)
+if showRVI and showSignals
+    // Заголовки
+    table.cell(rvi_panel, 0, 0, "RVI Индикатор", bgcolor=color.new(color.blue, 70), text_color=color.white, text_size=size.small)
+    table.cell(rvi_panel, 1, 0, "Статус", bgcolor=color.new(color.blue, 70), text_color=color.white, text_size=size.small)
+    
+    // RVI статус
+    rvi_status = rvi_main > rvi_signal ? "Бычий" : "Медвежий"
+    
+    table.cell(rvi_panel, 0, 1, "Направление", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(rvi_panel, 1, 1, rvi_status, bgcolor=rvi_status == "Бычий" ? color.new(color.green, 70) : color.new(color.red, 70), text_color=color.white)
+    
+    // RVI сигналы
+    signal_status = "Нет сигнала"
+    if long_signal
+        signal_status := "ПОКУПКА"
+    else if short_signal
+        signal_status := "ПРОДАЖА"
+    else if bullish_div
+        signal_status := "Бычья дивергенция"
+    else if bearish_div
+        signal_status := "Медвежья дивергенция"
+    
+    table.cell(rvi_panel, 0, 2, "Сигнал", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(rvi_panel, 1, 2, signal_status, bgcolor=signal_status == "ПОКУПКА" ? color.new(color.green, 50) : signal_status == "ПРОДАЖА" ? color.new(color.red, 50) : signal_status == "Бычья дивергенция" ? color.new(color.blue, 60) : signal_status == "Медвежья дивергенция" ? color.new(color.fuchsia, 60) : color.new(color.gray, 70), text_color=color.white)
+
+// Алерты для RVI
+alertcondition(long_signal, title="RVI Сигнал на покупку", message="RVI Сигнал на покупку на {{ticker}}")
+alertcondition(short_signal, title="RVI Сигнал на продажу", message="RVI Сигнал на продажу на {{ticker}}")
+alertcondition(bullish_div, title="RVI Бычья дивергенция", message="RVI Бычья дивергенция на {{ticker}}")
+alertcondition(bearish_div, title="RVI Медвежья дивергенция", message="RVI Медвежья дивергенция на {{ticker}}")

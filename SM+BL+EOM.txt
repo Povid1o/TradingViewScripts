@@ -1,0 +1,622 @@
+//@version=5
+// --- НАЧАЛО ЗАГОЛОВКА ---
+// © LuxAlgo (Логика SMC адаптирована из 'Smart Money Concepts [LuxAlgo]')
+// Лицензия на оригинальную часть SMC: Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0) https://creativecommons.org/licenses/by-nc-sa/4.0/
+// Описание: Эта стратегия объединяет концепции Smart Money Concepts (SMC) для определения структуры рынка и направления,
+// Bollinger Awesome для триггеров входа и Ease of Movement (EOM) для подтверждения импульса.
+// --- КОНЕЦ ЗАГОЛОВКА ---
+
+// ---== Декларация Стратегии ==---
+strategy(
+     title='Стратегия SMC + Bollinger Awesome + EOM',
+     shorttitle='SMC+BA+EOM',
+     overlay=true,
+     pyramiding=0, // Только одна сделка в одном направлении
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=1, // Размер позиции 1% от капитала по умолчанию
+     commission_type=strategy.commission.percent,
+     commission_value=0.075, // Пример комиссии
+     slippage = 2 // Пример проскальзывания в тиках
+     )
+
+// ---== Константы и Строки ==---
+// Константы для SMC (адаптировано из LuxAlgo)
+BULLISH_LEG = 1
+BEARISH_LEG = 0
+BULLISH     = 1
+BEARISH     = -1
+NONE        = 0
+
+// Цвета (можно настроить)
+colorBullish = color.new(#089981, 0)  // Зеленый бычий
+colorBearish = color.new(#F23645, 0)  // Красный медвежий
+colorStructure = color.new(color.blue, 0) // Синий для структуры
+colorOBBullish = color.new(color.green, 85) // Прозрачный зеленый для бычьих ОБ
+colorOBBearish = color.new(color.red, 85)   // Прозрачный красный для медвежьих ОБ
+colorEQ = color.new(color.orange, 0)  // Оранжевый для EQH/EQL
+colorPremium = color.new(color.red, 90)    // Красный для Premium зоны
+colorDiscount = color.new(color.green, 90) // Зеленый для Discount зоны
+colorAOUp = color.new(color.green, 40)
+colorADown = color.new(color.red, 40)
+colorEOMSignal = color.new(color.purple, 0)
+
+// ---== Входные Параметры (Inputs) ==---
+// --- Группа SMC ---
+smc_group = "Настройки Smart Money Concepts (SMC)"
+// Параметры структуры (адаптировано из LuxAlgo)
+pivotLookback = input.int(15, 'Длина поиска свингов', minval=2, group=smc_group)
+useSwingStructure = input.bool(true, 'Использовать Swing структуру?', group=smc_group) // По ТЗ: true
+useInternalStructure = input.bool(false, 'Использовать Internal структуру?', group=smc_group) // По ТЗ: false
+showBOS = input.bool(true, 'Показывать BOS?', group=smc_group)
+showCHoCH = input.bool(true, 'Показывать CHoCH?', group=smc_group)
+// MTF Highs & Lows (По ТЗ: добавить дневной/недельный)
+mtfTimeframe = input.timeframe('D', 'Таймфрейм для MTF Highs/Lows', options=['D', 'W'], group=smc_group)
+showMTFHL = input.bool(true, "Показывать MTF Highs/Lows?", group=smc_group)
+// Ордер-блоки (ОБ)
+obLookback = input.int(20, 'Длина поиска ОБ', minval=1, group=smc_group)
+mitigationMethod = input.string('Wick', 'Метод митигации ОБ', options=['Wick', 'Close'], group=smc_group)
+showOB = input.bool(true, 'Показывать Ордер-блоки?', group=smc_group)
+extendOB = input.bool(true, 'Продлевать Ордер-блоки?', group=smc_group)
+// EQH/EQL
+eqLookback = input.int(10, 'Длина поиска EQH/EQL', minval=2, group=smc_group)
+eqThreshold = input.float(0.001, 'Порог для EQ (%)', minval=0, step=0.001, group=smc_group)
+showEQ = input.bool(true, 'Показывать EQH/EQL?', group=smc_group)
+// Premium/Discount зоны
+showPDZones = input.bool(true, 'Показывать Premium/Discount зоны?', group=smc_group)
+pdLookback = input.int(50, 'Длина поиска для P/D зон', minval=5, group=smc_group)
+
+// --- Группа Bollinger Awesome ---
+ba_group = "Настройки Bollinger Awesome (BA)"
+fastMALen = input.int(3, 'Период быстрой EMA', minval=1, group=ba_group) // По ТЗ: 3
+bbLen = input.int(20, 'Период Bollinger Bands', minval=1, group=ba_group) // По ТЗ: 20
+bbStdDev = input.float(2.0, 'Отклонение Bollinger Bands', minval=0.1, group=ba_group) // По ТЗ: 2.0
+aoLen1 = input.int(5, 'Быстрый период AO', minval=1, group=ba_group) // По ТЗ: 5 (стандарт)
+aoLen2 = input.int(34, 'Медленный период AO', minval=1, group=ba_group) // По ТЗ: 34 (стандарт)
+useBBSqueezeFilter = input.bool(true, 'Фильтр BB Squeeze?', group=ba_group) // По ТЗ: true
+sqzThreshold = input.float(1.0, 'Порог BB Squeeze (ATR)', minval=0.1, group=ba_group) // Порог для определения сжатия
+useInsideBBFilter = input.bool(true, 'Фильтр "Сигнал внутри BB"?', group=ba_group) // По ТЗ: true
+
+// --- Группа Ease of Movement (EOM) ---
+eom_group = "Настройки Ease of Movement (EOM)"
+eomSMALen = input.int(24, 'Период SMA для EOM', minval=1, group=eom_group) // По ТЗ: 24
+eomStdDevMult = input.float(2.5, 'Множитель StdDev для EOM', minval=0.1, group=eom_group) // По ТЗ: 2.5
+volumeDivisor = input.int(100000, 'Делитель объема для EOM', minval=1, group=eom_group) // Как в оригинале
+showEOMSignals = input.bool(true, 'Показывать сигналы EOM?', group=eom_group) // По ТЗ: Отображать сигналы
+
+// --- Группа Фильтров Стратегии ---
+filter_group = "Фильтры Стратегии"
+useFlatFilterSMC = input.bool(true, 'Фильтр флета по SMC (множ. BOS/CHoCH)?', group=filter_group)
+flatLookback = input.int(10, 'Длина поиска для фильтра флета SMC', minval=2, group=filter_group)
+useFlatFilterBBWidth = input.bool(true, 'Фильтр флета по ширине BB?', group=filter_group)
+bbWidthAvgLen = input.int(50, 'Длина SMA для средней ширины BB', minval=5, group=filter_group)
+useVolatilityFilter = input.bool(true, 'Фильтр волатильности (закрытие вне BB)?', group=filter_group) // По ТЗ: Пропускать сигналы...
+useEOMFilter = input.bool(true, 'Фильтр EOM (близость к нулю / противоречие)?', group=filter_group)
+eomZeroThreshold = input.float(0.0001, 'Порог близости EOM к нулю', minval=0, step=0.0001, group=filter_group)
+
+// --- Группа Управления Рисками ---
+risk_group = "Управление Рисками (SL/TP)"
+useSMC_SL = input.bool(true, 'Использовать SL по уровням SMC?', group=risk_group)
+useSMC_TP = input.bool(true, 'Использовать TP по уровням SMC?', group=risk_group)
+slAtrMult = input.float(1.5, 'Множитель ATR для SL (если SMC SL выкл)', minval=0.1, group=risk_group)
+tpRR = input.float(2.0, 'Соотношение R:R для TP (если SMC TP выкл)', minval=0.1, group=risk_group)
+atrLen = input.int(14, 'Период ATR для SL/TP', minval=1, group=risk_group)
+
+// ---== Библиотеки / Вспомогательные Функции ==---
+
+// Функция для получения значения с другого таймфрейма
+f_getMTF(tf, value) =>
+    request.security(syminfo.tickerid, tf, value[barstate.isrealtime ? 1 : 0])[barstate.isrealtime ? 0 : 1] // Избегаем репеинтинга
+
+// ---== Расчеты Индикаторов ==---
+
+// --- 1. Логика SMC (Адаптировано и Упрощено из LuxAlgo SMC v5) ---
+//    (ВНИМАНИЕ: Это сильно упрощенная версия для интеграции. Полная логика LuxAlgo очень объемна)
+
+// Определение свингов (упрощенно)
+float swingHigh = ta.pivothigh(high, pivotLookback, pivotLookback)
+float swingLow = ta.pivotlow(low, pivotLookback, pivotLookback)
+float lastSwingHigh = na
+float lastSwingLow = na
+int lastSwingHighBar = na
+int lastSwingLowBar = na
+
+if not na(swingHigh)
+    lastSwingHigh := swingHigh
+    lastSwingHighBar := bar_index - pivotLookback
+if not na(swingLow)
+    lastSwingLow := swingLow
+    lastSwingLowBar := bar_index - pivotLookback
+
+// Определение структуры (BOS/CHoCH - упрощенно)
+var int marketStructure = NONE // 1 = Bullish, -1 = Bearish
+var float lastStructureHigh = na
+var float lastStructureLow = na
+var int lastBOSBar = na
+var int lastCHoCHBar = na
+var bool bullishBOS = false
+var bool bearishBOS = false
+var bool bullishCHoCH = false
+var bool bearishCHoCH = false
+
+bullishBOS := false
+bearishBOS := false
+bullishCHoCH := false
+bearishCHoCH := false
+
+if useSwingStructure
+    // Бычья структура
+    if high > nz(lastSwingHigh, high[1]) and not na(lastSwingHigh)
+        if marketStructure == BEARISH // Смена характера (CHoCH)
+            bullishCHoCH := true
+            marketStructure := BULLISH
+            lastStructureLow := lastSwingLow
+            lastStructureHigh := high
+            lastCHoCHBar := bar_index
+        else if marketStructure == BULLISH // Продолжение (BOS)
+            bullishBOS := true
+            marketStructure := BULLISH
+            lastStructureLow := lastSwingLow // Обновляем HL
+            lastStructureHigh := high
+            lastBOSBar := bar_index
+        else // Первое определение
+            marketStructure := BULLISH
+            lastStructureLow := lastSwingLow
+            lastStructureHigh := high
+
+    // Медвежья структура
+    if low < nz(lastSwingLow, low[1]) and not na(lastSwingLow)
+        if marketStructure == BULLISH // Смена характера (CHoCH)
+            bearishCHoCH := true
+            marketStructure := BEARISH
+            lastStructureHigh := lastSwingHigh
+            lastStructureLow := low
+            lastCHoCHBar := bar_index
+        else if marketStructure == BEARISH // Продолжение (BOS)
+            bearishBOS := true
+            marketStructure := BEARISH
+            lastStructureHigh := lastSwingHigh // Обновляем LH
+            lastStructureLow := low
+            lastBOSBar := bar_index
+        else // Первое определение
+            marketStructure := BEARISH
+            lastStructureHigh := lastSwingHigh
+            lastStructureLow := low
+
+// Запоминаем последнее состояние структуры
+var int lastMarketStructure = marketStructure
+if marketStructure != lastMarketStructure
+    lastMarketStructure := marketStructure
+
+// Определение Ордер-блоков (ОБ - упрощенно)
+// Бычий ОБ: Последняя медвежья свеча перед сильным бычьим движением
+// Медвежий ОБ: Последняя бычья свеча перед сильным медвежьим движением
+var box bullOB = na
+var box bearOB = na
+var float bullOB_High = na
+var float bullOB_Low = na
+var float bearOB_High = na
+var float bearOB_Low = na
+var bool isBullOBMitigated = false
+var bool isBearOBMitigated = false
+
+// Логика поиска ОБ (очень упрощенная)
+isBullishCandle = close > open
+isBearishCandle = close < open
+bodySize = math.abs(close - open)
+atrOB = ta.atr(obLookback)
+
+// Поиск Бычьего ОБ
+if isBearishCandle[1] and isBullishCandle and close > high[1] and bodySize > atrOB * 0.5 // Условие импульса
+    bullOB_Low := low[1]
+    bullOB_High := high[1]
+    isBullOBMitigated := false
+    if box.get_bottom(bullOB) != na
+        box.delete(bullOB)
+    // Рисуем новый ОБ только если включено отображение
+    if showOB
+        bullOB := box.new(bar_index[1], bullOB_Low, bar_index, bullOB_High, border_color=color.new(color.green, 50), border_width=1, bgcolor=colorOBBullish, extend=extendOB ? extend.right : extend.none, text='Bull OB', text_color=color.black, text_size=size.tiny)
+    else
+        bullOB := na // Если ОБ не отображаются, не создаем box
+
+// Поиск Медвежьего ОБ
+if isBullishCandle[1] and isBearishCandle and close < low[1] and bodySize > atrOB * 0.5 // Условие импульса
+    bearOB_Low := low[1]
+    bearOB_High := high[1]
+    isBearOBMitigated := false
+    if box.get_bottom(bearOB) != na
+        box.delete(bearOB)
+    // Рисуем новый ОБ только если включено отображение
+    if showOB
+        bearOB := box.new(bar_index[1], bearOB_Low, bar_index, bearOB_High, border_color=color.new(color.red, 50), border_width=1, bgcolor=colorOBBearish, extend=extendOB ? extend.right : extend.none, text = "Bear OB", text_color = color.black, text_halign = text.align_center, text_size = size.tiny)
+    else
+        bearOB := na // Если ОБ не отображаются, не создаем box
+
+// Проверка митигации ОБ (упрощенно)
+if not na(bullOB) and not isBullOBMitigated
+    if low <= box.get_top(bullOB) // Цена коснулась или пробила ОБ
+        isBullOBMitigated := true
+        if showOB // Обновляем вид только если ОБ отображается
+            box.set_border_color(bullOB, color.new(color.gray, 50))
+            box.set_bgcolor(bullOB, color.new(color.gray, 90))
+            box.set_extend(bullOB, extend.none)
+
+if not na(bearOB) and not isBearOBMitigated
+    if high >= box.get_bottom(bearOB) // Цена коснулась или пробила ОБ
+        isBearOBMitigated := true
+        if showOB // Обновляем вид только если ОБ отображается
+            box.set_border_color(bearOB, color.new(color.gray, 50))
+            box.set_bgcolor(bearOB, color.new(color.gray, 90))
+            box.set_extend(bearOB, extend.none)
+
+// Запоминаем координаты последних немитигированных ОБ для TP
+// Важно: Эти переменные должны обновляться всегда, даже если showOB = false,
+// так как они используются для логики TP.
+var float lastUnmitigatedBullOB_Low = na
+var float lastUnmitigatedBullOB_High = na
+var float lastUnmitigatedBearOB_Low = na
+var float lastUnmitigatedBearOB_High = na
+
+// Обновляем координаты, если найден новый немитигированный ОБ
+if isBearishCandle[1] and isBullishCandle and close > high[1] and bodySize > atrOB * 0.5
+    lastUnmitigatedBullOB_Low := low[1]
+    lastUnmitigatedBullOB_High := high[1]
+if isBullishCandle[1] and isBearishCandle and close < low[1] and bodySize > atrOB * 0.5
+    lastUnmitigatedBearOB_Low := low[1]
+    lastUnmitigatedBearOB_High := high[1]
+
+// Сбрасываем координаты, если ОБ был митигирован
+if isBullOBMitigated and not na(bullOB) and lastUnmitigatedBullOB_Low == box.get_bottom(bullOB)
+    lastUnmitigatedBullOB_Low := na
+    lastUnmitigatedBullOB_High := na
+if isBearOBMitigated and not na(bearOB) and lastUnmitigatedBearOB_Low == box.get_bottom(bearOB)
+    lastUnmitigatedBearOB_Low := na
+    lastUnmitigatedBearOB_High := na
+
+
+// Определение EQH/EQL (упрощенно)
+float highestHigh = ta.highest(high, eqLookback)
+float lowestLow = ta.lowest(low, eqLookback)
+var float lastEQH = na
+var float lastEQL = na
+var int lastEQHBar = na
+var int lastEQLBar = na
+bool isEQH = false
+bool isEQL = false
+
+// Проверяем последние N баров на наличие почти равных максимумов/минимумов
+for i = 1 to eqLookback - 1 by 1
+    if not na(high[i]) and high[i] != highestHigh and math.abs(high[i] - highestHigh) / highestHigh < eqThreshold
+        isEQH := true
+        lastEQH := highestHigh
+        lastEQHBar := bar_index - ta.highestbars(high, eqLookback) // Бар, где был highestHigh
+        break
+for i = 1 to eqLookback - 1 by 1
+    if not na(low[i]) and low[i] != lowestLow and math.abs(low[i] - lowestLow) / lowestLow < eqThreshold
+        isEQL := true
+        lastEQL := lowestLow
+        lastEQLBar := bar_index - ta.lowestbars(low, eqLookback) // Бар, где был lowestLow
+        break
+
+// Запоминаем последние EQH/EQL
+var float recentEQH = na
+var float recentEQL = na
+if isEQH
+    recentEQH := lastEQH
+if isEQL
+    recentEQL := lastEQL
+
+// Premium/Discount зоны (упрощенно)
+// Находим последний значимый свинг High/Low
+pdHighest = ta.highest(high, pdLookback)
+pdLowest = ta.lowest(low, pdLookback)
+pdMidpoint = pdLowest + (pdHighest - pdLowest) / 2
+
+// --- 2. Логика Bollinger Awesome (Портировано с v4 и адаптировано) ---
+// Bollinger Bands
+bbBasis = ta.sma(close, bbLen)
+bbDev = bbStdDev * ta.stdev(close, bbLen)
+bbUpper = bbBasis + bbDev
+bbLower = bbBasis - bbDev
+bbWidth = bbUpper - bbLower
+
+// Fast EMA
+fastMA = ta.ema(close, fastMALen)
+
+// Awesome Oscillator (AO)
+ao = ta.sma(hl2, aoLen1) - ta.sma(hl2, aoLen2)
+aoColor = ao > 0 ? (ao > ao[1] ? color.green : color.lime) : (ao < ao[1] ? color.red : color.maroon) // Стандартные цвета AO
+
+// BB Squeeze (используем ширину BB относительно ATR)
+bbAtr = ta.atr(bbLen)
+bbAtr := nz(bbAtr, 1) // Защита от деления на ноль
+bbWidthATR = bbWidth / bbAtr
+isSqueezed = bbWidthATR < sqzThreshold // Условие сжатия
+
+// Сигналы BA
+baLongSignalRaw = ta.crossover(fastMA, bbBasis) // EMA пересекает основу снизу вверх
+baShortSignalRaw = ta.crossunder(fastMA, bbBasis) // EMA пересекает основу сверху вниз
+
+aoLongSignal = ta.crossover(ao, 0) // AO пересекает 0 снизу вверх
+aoShortSignal = ta.crossunder(ao, 0) // AO пересекает 0 сверху вниз
+
+// Применяем фильтры BA
+// Фильтр "Сигнал внутри BB" проверяет СВЕЧУ СИГНАЛА (предыдущую)
+insideBB_long = not useInsideBBFilter or close[1] < bbUpper[1]
+insideBB_short = not useInsideBBFilter or close[1] > bbLower[1]
+
+baLongTrigger = baLongSignalRaw and aoLongSignal and insideBB_long and (not useBBSqueezeFilter or not isSqueezed)
+baShortTrigger = baShortSignalRaw and aoShortSignal and insideBB_short and (not useBBSqueezeFilter or not isSqueezed)
+
+// --- 3. Логика Ease of Movement (EOM) (Портировано с v3 и адаптировано) ---
+// Расчет EOM
+distanceMoved = hl2 - hl2[1]
+boxRatioDen = high - low
+boxRatioDen := boxRatioDen == 0 ? 1 : boxRatioDen // Избегаем деления на ноль
+boxRatio = (volume / volumeDivisor) / boxRatioDen
+eomRaw = distanceMoved / boxRatio
+eomRaw := boxRatio == 0 or na(boxRatio) ? 0 : eomRaw // Если boxRatio = 0 или na, EOM = 0
+
+// Сглаживание EOM и StdDev
+eomSMA = ta.sma(eomRaw, eomSMALen)
+eomStdDevVal = ta.stdev(eomSMA, eomSMALen)
+eomStdDev = eomStdDevVal * eomStdDevMult
+eomUpperBand = eomStdDev
+eomLowerBand = -eomStdDev
+
+// Сигналы EOM
+eomLongSignalExtreme = ta.crossover(eomSMA, eomLowerBand) // Выход из нижней зоны
+eomShortSignalExtreme = ta.crossunder(eomSMA, eomUpperBand) // Выход из верхней зоны
+
+eomLongConfirm = (eomSMA > 0 and eomSMA > nz(eomSMA[1])) or eomLongSignalExtreme // EOM > 0 и растет ИЛИ сигнал выхода из экстр.
+eomShortConfirm = (eomSMA < 0 and eomSMA < nz(eomSMA[1])) or eomShortSignalExtreme // EOM < 0 и падает ИЛИ сигнал выхода из экстр.
+
+// ---== Логика Стратегии ==---
+
+// --- Определение Направления по SMC ---
+// Используем последнее состояние структуры (бычье/медвежье)
+smcDirection = lastMarketStructure
+
+// --- Фильтры ---
+// Фильтр флета SMC: проверяем, были ли разнонаправленные BOS/CHoCH недавно (упрощенно)
+var int lastBullEventBar = na
+var int lastBearEventBar = na
+if bullishBOS or bullishCHoCH
+    lastBullEventBar := bar_index
+if bearishBOS or bearishCHoCH
+    lastBearEventBar := bar_index
+
+recentBOS_CHoCH_Count = (not na(lastBullEventBar) and not na(lastBearEventBar) and math.abs(lastBullEventBar - lastBearEventBar) <= flatLookback) ? 1 : 0
+
+passFlatFilterSMC = not useFlatFilterSMC or recentBOS_CHoCH_Count == 0
+
+// Фильтр флета по ширине BB
+avgBBWidth = ta.sma(bbWidth, bbWidthAvgLen)
+passFlatFilterBBWidth = not useFlatFilterBBWidth or bbWidth > avgBBWidth
+
+// Фильтр волатильности (закрытие вне BB) - проверяем СВЕЧУ СИГНАЛА (предыдущую)
+passVolatilityFilter = not useVolatilityFilter or (close[1] <= bbUpper[1] and close[1] >= bbLower[1])
+
+// Фильтр EOM
+passEOMFilter = not useEOMFilter or (math.abs(eomSMA) > eomZeroThreshold and
+     ((smcDirection == BULLISH and eomSMA > 0) or (smcDirection == BEARISH and eomSMA < 0) or (eomLongSignalExtreme and smcDirection == BULLISH) or (eomShortSignalExtreme and smcDirection == BEARISH)) ) // EOM не около нуля и совпадает с направлением SMC или есть экстремальный сигнал
+
+// Общий результат фильтров
+passAllFilters = passFlatFilterSMC and passFlatFilterBBWidth and passVolatilityFilter and passEOMFilter
+
+// --- Условия Входа ---
+longCondition = smcDirection == BULLISH and baLongTrigger and eomLongConfirm and passAllFilters and strategy.position_size == 0
+shortCondition = smcDirection == BEARISH and baShortTrigger and eomShortConfirm and passAllFilters and strategy.position_size == 0
+
+// --- Расчет SL и TP ---
+currentAtr = ta.atr(atrLen)
+float longSL = na
+float longTP = na
+float shortSL = na
+float shortTP = na
+
+// Определяем SL
+if longCondition
+    if useSMC_SL and not na(lastStructureLow) // Используем последний Higher Low
+        longSL := lastStructureLow - currentAtr * 0.2 // Небольшой отступ ниже HL
+    // else if useSMC_SL and not na(lastUnmitigatedBullOB_Low) // Или дно бычьего ОБ (убрано для упрощения)
+    //     longSL := lastUnmitigatedBullOB_Low - currentAtr * 0.2
+    else // Используем ATR
+        longSL := close - currentAtr * slAtrMult // SL от цены закрытия сигнальной свечи
+
+if shortCondition
+    if useSMC_SL and not na(lastStructureHigh) // Используем последний Lower High
+        shortSL := lastStructureHigh + currentAtr * 0.2 // Небольшой отступ выше LH
+    // else if useSMC_SL and not na(lastUnmitigatedBearOB_High) // Или вершину медвежьего ОБ (убрано для упрощения)
+    //     shortSL := lastUnmitigatedBearOB_High + currentAtr * 0.2
+    else // Используем ATR
+        shortSL := close + currentAtr * slAtrMult // SL от цены закрытия сигнальной свечи
+
+// Определяем TP
+if longCondition and not na(longSL)
+    risk = close - longSL
+    risk := risk <= 0 ? currentAtr : risk // Защита от нулевого/отрицательного риска
+    if useSMC_TP and not na(lastUnmitigatedBearOB_Low) // Цель - ближайший Медвежий ОБ (дно)
+        longTP := lastUnmitigatedBearOB_Low
+    else if useSMC_TP and not na(recentEQH) // Или ближайший EQH
+        longTP := recentEQH
+    else // Используем R:R
+        longTP := close + risk * tpRR
+
+if shortCondition and not na(shortSL)
+    risk = shortSL - close
+    risk := risk <= 0 ? currentAtr : risk // Защита от нулевого/отрицательного риска
+    if useSMC_TP and not na(lastUnmitigatedBullOB_High) // Цель - ближайший Бычий ОБ (вершина)
+        shortTP := lastUnmitigatedBullOB_High
+    else if useSMC_TP and not na(recentEQL) // Или ближайший EQL
+        shortTP := recentEQL
+    else // Используем R:R
+        shortTP := close - risk * tpRR
+
+// Убедимся, что TP имеет смысл (TP > SL для лонга, TP < SL для шорта) и не равен na
+if longCondition and not na(longTP) and longTP <= longSL
+    risk = close - longSL
+    risk := risk <= 0 ? currentAtr : risk
+    longTP := close + risk * tpRR // Запасной вариант R:R
+if shortCondition and not na(shortTP) and shortTP >= shortSL
+    risk = shortSL - close
+    risk := risk <= 0 ? currentAtr : risk
+    shortTP := close - risk * tpRR // Запасной вариант R:R
+
+// --- Переменные для хранения SL/TP текущей сделки для отрисовки ---
+var float plotSL = na
+var float plotTP = na
+
+// --- Условия Выхода по Индикаторам ---
+longExitSignal = (ta.crossunder(fastMA, bbBasis)) or (ta.crossunder(ao, 0)) or eomShortSignalExtreme
+shortExitSignal = (ta.crossover(fastMA, bbBasis)) or (ta.crossover(ao, 0)) or eomLongSignalExtreme
+
+// --- Выполнение Стратегии ---
+if longCondition
+    strategy.entry('Long', strategy.long)
+    // Сохраняем SL/TP для отрисовки
+    plotSL := longSL
+    plotTP := longTP
+    // Устанавливаем SL и TP через strategy.exit
+    if not na(longSL) and not na(longTP)
+        strategy.exit('Exit Long', 'Long', stop=longSL, limit=longTP)
+    else if not na(longSL) // Если только SL рассчитан
+        strategy.exit('Exit Long SL Only', 'Long', stop=longSL)
+
+if shortCondition
+    strategy.entry('Short', strategy.short)
+    // Сохраняем SL/TP для отрисовки
+    plotSL := shortSL
+    plotTP := shortTP
+    // Устанавливаем SL и TP через strategy.exit
+    if not na(shortSL) and not na(shortTP)
+        strategy.exit('Exit Short', 'Short', stop=shortSL, limit=shortTP)
+    else if not na(shortSL) // Если только SL рассчитан
+        strategy.exit('Exit Short SL Only', 'Short', stop=shortSL)
+
+// Закрытие по сигналам индикаторов (если позиция еще открыта)
+if strategy.position_size > 0 and longExitSignal
+    strategy.close('Long', comment='Exit Long Signal')
+
+if strategy.position_size < 0 and shortExitSignal
+    strategy.close('Short', comment='Exit Short Signal')
+
+// Сбрасываем уровни для отрисовки при закрытии позиции
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    plotSL := na
+    plotTP := na
+
+// ---== Визуализация ==---
+
+// --- Отображение SMC ---
+// BOS/CHoCH метки (Исправлено: вынесены в глобальную область)
+plotshape(showBOS and bullishBOS, title='Bullish BOS', location=location.belowbar, color=colorStructure, style=shape.triangleup, size=size.small, text='BOS')
+plotshape(showBOS and bearishBOS, title='Bearish BOS', location=location.abovebar, color=colorStructure, style=shape.triangledown, size=size.small, text='BOS')
+plotshape(showCHoCH and bullishCHoCH, title='Bullish CHoCH', location=location.belowbar, color=color.new(color.aqua, 0), style=shape.labelup, size=size.tiny, text='CHoCH')
+plotshape(showCHoCH and bearishCHoCH, title='Bearish CHoCH', location=location.abovebar, color=color.new(color.aqua, 0), style=shape.labeldown, size=size.tiny, text='CHoCH')
+
+// Ордер-блоки уже рисуются при создании через box.new() (если showOB = true)
+
+// EQH/EQL линии
+var line eqhLine = na
+var line eqlLine = na
+
+if showEQ
+    if isEQH and not na(lastEQH)
+        if line.get_price(eqhLine, bar_index) != lastEQH // Рисуем/перемещаем линию только если значение изменилось
+            line.delete(eqhLine)
+            eqhLine := line.new(lastEQHBar, lastEQH, bar_index, lastEQH, color=colorEQ, style=line.style_dashed, width=1, extend=extend.right)
+    if isEQL and not na(lastEQL)
+        if line.get_price(eqlLine, bar_index) != lastEQL // Рисуем/перемещаем линию только если значение изменилось
+            line.delete(eqlLine)
+            eqlLine := line.new(lastEQLBar, lastEQL, bar_index, lastEQL, color=colorEQ, style=line.style_dashed, width=1, extend=extend.right)
+else // Удаляем линии, если опция выключена
+    line.delete(eqhLine)
+    line.delete(eqlLine)
+    eqhLine := na
+    eqlLine := na
+
+
+// Premium/Discount зоны (Исправлено: используем plot и fill)
+plotPDHigh = plot(showPDZones ? pdHighest : na, color=na, title="PD High Level") // Невидимый plot
+plotPDMid = plot(showPDZones ? pdMidpoint : na, color=na, title="PD Mid Level")   // Невидимый plot
+plotPDLow = plot(showPDZones ? pdLowest : na, color=na, title="PD Low Level")    // Невидимый plot
+
+fill(plotPDHigh, plotPDMid, color=showPDZones ? colorPremium : na, title='Premium Zone')
+fill(plotPDMid, plotPDLow, color=showPDZones ? colorDiscount : na, title='Discount Zone')
+
+
+// MTF High/Low
+mtfH = f_getMTF(mtfTimeframe, high)
+mtfL = f_getMTF(mtfTimeframe, low)
+plot(showMTFHL ? mtfH : na, "MTF High", color=color.new(color.gray, 50), style=plot.style_stepline, linewidth=1)
+plot(showMTFHL ? mtfL : na, "MTF Low", color=color.new(color.gray, 50), style=plot.style_stepline, linewidth=1)
+
+// --- Отображение Bollinger Awesome ---
+plot(bbBasis, 'BB Basis', color=color.red, linewidth=1)
+p1 = plot(bbUpper, 'BB Upper', color=color.blue, linewidth=1)
+p2 = plot(bbLower, 'BB Lower', color=color.blue, linewidth=1)
+fill(p1, p2, title='BB Fill', color=color.new(color.blue, 90))
+plot(fastMA, 'Fast EMA', color=color.black, linewidth=2)
+
+// --- Отображение EOM ---
+// Сигналы EOM (если включено)
+plotshape(showEOMSignals and eomLongSignalExtreme, title="EOM Long Signal", location=location.belowbar, color=colorEOMSignal, style=shape.circle, size=size.tiny, text="EOM ▲")
+plotshape(showEOMSignals and eomShortSignalExtreme, title="EOM Short Signal", location=location.abovebar, color=colorEOMSignal, style=shape.circle, size=size.tiny, text="EOM ▼")
+
+// --- Отображение SL/TP на графике (только для текущей сделки) (Исправлено: используем plotSL/plotTP) ---
+var line slLine = na
+var line tpLine = na
+var label slLabel = na
+var label tpLabel = na
+
+// Функция для обновления или создания линии и метки
+update_line_label(lineVar, labelVar, y_val, line_color, label_text, label_y_loc, label_text_color, label_style) =>
+    var line newLine = na
+    var label newLabel = na
+    if not na(y_val) and strategy.position_size != 0 // Рисуем только если есть значение и открыта позиция
+        // Создаем/обновляем линию
+        if na(lineVar) or line.get_y1(lineVar) != y_val
+            line.delete(lineVar)
+            newLine := line.new(bar_index - 1, y_val, bar_index, y_val, color=line_color, style=line.style_dashed, width=1, extend=extend.right)
+        else
+            line.set_x2(lineVar, bar_index)
+            newLine := lineVar // Возвращаем существующую линию
+        // Создаем/обновляем метку
+        if na(labelVar) or label.get_y(labelVar) != y_val
+            label.delete(labelVar)
+            newLabel := label.new(bar_index + 5, y_val, label_text, yloc=label_y_loc, color=color.new(line_color, 100), textcolor=label_text_color, style=label_style, size=size.small)
+        else
+            label.set_xy(labelVar, bar_index + 5, y_val)
+            newLabel := labelVar // Возвращаем существующую метку
+    else // Если нет значения или позиция закрыта, удаляем
+        line.delete(lineVar)
+        label.delete(labelVar)
+        newLine := na
+        newLabel := na
+    [newLine, newLabel] // Возвращаем обновленные/удаленные объекты
+
+
+// Вызываем функцию обновления для SL и TP
+[slLineTemp, slLabelTemp] = update_line_label(slLine, slLabel, plotSL, color.red, "SL: " + str.tostring(plotSL, format.mintick), yloc.price, color.white, label.style_label_left)
+slLine := slLineTemp
+slLabel := slLabelTemp
+[tpLineTemp, tpLabelTemp] = update_line_label(tpLine, tpLabel, plotTP, color.green, "TP: " + str.tostring(plotTP, format.mintick), yloc.price, color.white, label.style_label_left)
+tpLine := tpLineTemp
+tpLabel := tpLabelTemp
+
+// ---== Алерты ==---
+// Алерты на вход
+alertcondition(longCondition, title='Вход в Лонг', message='SMC+BA+EOM: Сигнал на покупку {{ticker}} на {{interval}}')
+alertcondition(shortCondition, title='Вход в Шорт', message='SMC+BA+EOM: Сигнал на продажу {{ticker}} на {{interval}}')
+
+// Алерты на изменения индикаторов (пример)
+alertcondition(ta.cross(ao, 0), title='AO пересек 0', message='AO пересек нулевую линию на {{ticker}}')
+alertcondition(ta.cross(eomSMA, eomUpperBand) or ta.cross(eomSMA, eomLowerBand), title='EOM пересек границу', message='EOM SMA пересек границу StdDev на {{ticker}}')
+
+// Алерты на выход по SL/TP (TradingView генерирует их автоматически для strategy.exit)
+// Можно добавить кастомные алерты на закрытие по сигналам индикаторов
+alertcondition(strategy.position_size[1] > 0 and strategy.position_size == 0 and longExitSignal[1], title='Лонг закрыт по сигналу', message='SMC+BA+EOM: Лонг позиция закрыта по сигналу индикатора на {{ticker}}')
+alertcondition(strategy.position_size[1] < 0 and strategy.position_size == 0 and shortExitSignal[1], title='Шорт закрыт по сигналу', message='SMC+BA+EOM: Шорт позиция закрыта по сигналу индикатора на {{ticker}}')
+
+// --- КОНЕЦ СКРИПТА ---

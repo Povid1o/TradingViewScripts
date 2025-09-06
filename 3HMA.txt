@@ -1,0 +1,93 @@
+//@version=4
+study("Тройной Hull Moving Average (HMA)", shorttitle="Triple HMA", overlay=true)
+
+//Код измеряет силу тренда и его направление благодаря HMA. Рекомендовано использовать на таймфреймах от 30m-1H до 1D
+
+// Выбор периодов для трех HMA
+hma_short_length = input(21, title="Малый период HMA (1H)", minval=1)
+hma_medium_length = input(34, title="Средний период HMA (4H)", minval=1)
+hma_long_length = input(55, title="Большой период HMA (1D)", minval=1)
+
+// Функция для расчета Hull Moving Average (HMA)
+hull_ma(src, length) =>
+    wma1 = wma(src, round(length/2)) 
+    wma2 = wma(src, length)
+    sqrtLength = round(sqrt(length)) 
+    wma(2 * wma1 - wma2, sqrtLength)
+
+// Расчет трех HMA
+hma_short = hull_ma(close, hma_short_length)
+hma_medium = hull_ma(close, hma_medium_length)
+hma_long = hull_ma(close, hma_long_length)
+
+// Определение цветов для различных режимов
+hma_short_color = hma_short > hma_short[1] ? color.green : color.red
+hma_medium_color = hma_medium > hma_medium[1] ? color.green : color.red
+hma_long_color = hma_long > hma_long[1] ? color.green : color.red
+
+// Вывод на график с явной привязкой к ценовому графику
+plot(series=hma_short, title="HMA (1H)", color=hma_short_color, linewidth=2)
+plot(series=hma_medium, title="HMA (4H)", color=hma_medium_color, linewidth=3)
+plot(series=hma_long, title="HMA (1D)", color=hma_long_color, linewidth=4)
+
+// Дополнительная настройка для отображения трендовых сигналов
+showSignals = input(true, title="Показывать сигналы тренда?")
+
+// Логика определения тренда
+trend_aligned_up = hma_short > hma_medium and hma_medium > hma_long
+trend_aligned_down = hma_short < hma_medium and hma_medium < hma_long
+
+// Фоновый цвет
+bgcolor(showSignals ? (trend_aligned_up ? color.new(color.green, 90) : trend_aligned_down ? color.new(color.red, 90) : na) : na)
+
+// Улучшенная таблица - более яркая
+var table panel = table.new(position.top_right, 3, 4, border_width=1)
+if (showSignals)
+    // Заголовки
+    table.cell(panel, 0, 0, "Тренд", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 0, "Направление", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+    table.cell(panel, 2, 0, "Сила", bgcolor=color.new(color.gray, 70), text_color=color.white, text_size=size.small)
+    
+    // Названия трендов
+    table.cell(panel, 0, 1, "HMA (1H)", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(panel, 0, 2, "HMA (4H)", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    table.cell(panel, 0, 3, "HMA (1D)", bgcolor=color.new(color.gray, 70), text_color=color.white)
+    
+    // Направление HMA
+    table.cell(panel, 1, 1, hma_short > hma_short[1] ? "Вверх" : "Вниз", 
+               bgcolor=hma_short > hma_short[1] ? color.new(color.green, 70) : color.new(color.red, 70),
+               text_color=color.white)
+    table.cell(panel, 1, 2, hma_medium > hma_medium[1] ? "Вверх" : "Вниз", 
+               bgcolor=hma_medium > hma_medium[1] ? color.new(color.green, 70) : color.new(color.red, 70),
+               text_color=color.white)
+    table.cell(panel, 1, 3, hma_long > hma_long[1] ? "Вверх" : "Вниз", 
+               bgcolor=hma_long > hma_long[1] ? color.new(color.green, 70) : color.new(color.red, 70),
+               text_color=color.white)
+    
+    // Оценка силы тренда (наклон HMA)
+    hma_short_slope = (hma_short - hma_short[5]) / 5
+    hma_medium_slope = (hma_medium - hma_medium[5]) / 5
+    hma_long_slope = (hma_long - hma_long[5]) / 5
+    
+    short_strength = abs(hma_short_slope) > 0.2 ? "Сильный" : abs(hma_short_slope) > 0.1 ? "Средний" : "Слабый"
+    medium_strength = abs(hma_medium_slope) > 0.15 ? "Сильный" : abs(hma_medium_slope) > 0.07 ? "Средний" : "Слабый"
+    long_strength = abs(hma_long_slope) > 0.1 ? "Сильный" : abs(hma_long_slope) > 0.05 ? "Средний" : "Слабый"
+    
+    table.cell(panel, 2, 1, short_strength,
+               bgcolor=short_strength == "Сильный" ? color.new(color.blue, 60) : 
+                     short_strength == "Средний" ? color.new(color.purple, 60) : color.new(color.gray, 60),
+               text_color=color.white)
+    table.cell(panel, 2, 2, medium_strength,
+               bgcolor=medium_strength == "Сильный" ? color.new(color.blue, 60) : 
+                     medium_strength == "Средний" ? color.new(color.purple, 60) : color.new(color.gray, 60),
+               text_color=color.white)
+    table.cell(panel, 2, 3, long_strength,
+               bgcolor=long_strength == "Сильный" ? color.new(color.blue, 60) : 
+                     long_strength == "Средний" ? color.new(color.purple, 60) : color.new(color.gray, 60),
+               text_color=color.white)
+
+// Алерты
+alertcondition(crossover(hma_short, hma_medium), title="Пересечение HMA (1H) и HMA (4H) вверх", message="Пересечение HMA (1H) и HMA (4H) вверх на {{ticker}}")
+alertcondition(crossunder(hma_short, hma_medium), title="Пересечение HMA (1H) и HMA (4H) вниз", message="Пересечение HMA (1H) и HMA (4H) вниз на {{ticker}}")
+alertcondition(crossover(hma_medium, hma_long), title="Пересечение HMA (4H) и HMA (1D) вверх", message="Пересечение HMA (4H) и HMA (1D) вверх на {{ticker}}")
+alertcondition(crossunder(hma_medium, hma_long), title="Пересечение HMA (4H) и HMA (1D) вниз", message="Пересечение HMA (4H) и HMA (1D) вниз на {{ticker}}")
